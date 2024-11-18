@@ -1,11 +1,13 @@
 import requests
 import re
 
-favorite_spots = [11, 46, 47, 13, 23, 25, 35, 48, 58, 9, 7, 5, 12, 10, 8, 6, 15, 17, 19, 21, 27, 29, 31, 33, 44, 42, 50, 52, 54, 56]
-email = "alberto.basaglia17@gmail.com"
-date = "2024-05-22"
-start_hour = "12:00"
+favorite_spots = [11, 46, 47, 13, 23, 25, 35, 48, 58, 9, 7, 5, 12, 10, 8, 6, 15, 17, 19, 21, 27, 29, 31, 33, 44, 42, 50, 52, 54, 56] # Thanks for everything you've done, my favorite spots :)
+email = "<EMAIL GOES HERE>" # Affluences email
+date = "2024-11-20"
+start_hour = "08:30"
 duration = 9 * 30
+pattern = "Posto a sedere ([0-9]+)" # Seat nomenclature pattern
+structure_id = "60f4531d-c564-4603-bb04-b909629653de" # unipd Someda structure id
 
 
 class Place:
@@ -28,8 +30,8 @@ def minutes_to_watch(minutes: int) -> str:
 
 
 
-availability_url = "https://reservation.affluences.com/api/resources/60f4531d-c564-4603-bb04-b909629653de/available"
-pattern = "Posto a sedere ([0-9]+)"
+availability_url = f"https://reservation.affluences.com/api/resources/{structure_id}/available"
+
 granularity = 30
 maxres = 30 * 8
 
@@ -111,7 +113,10 @@ def reserve_place(resid, date, start_time, end_time):
         "person_count": 1
     }
     res = requests.post("https://reservation.affluences.com/api/reserve/{}".format(resid),body)
+    if res.status_code != 200:
+        print(res.text)
     print(res)
+
 
 def make_reservation(place):
     print("Reserving place: {}".format(place.number))
