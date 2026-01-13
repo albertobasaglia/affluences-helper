@@ -1,5 +1,20 @@
 import requests
 from typing import List, Dict, Any
+from datetime import datetime, timedelta
+import os
+import logging
+
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.constants import ParseMode
+
+
+# Setup logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 
 def get_available_seats(structure_id: str, date: str, time_slot: str) -> Dict[str, List[Dict[str, Any]]]:
@@ -101,30 +116,137 @@ def get_available_seats(structure_id: str, date: str, time_slot: str) -> Dict[st
     return results
 
 
-# Example usage
-if __name__ == "__main__":
-    structure_id = "4b867ddd-46fd-4fe5-a57b-cdd4a3e1520d"
-    date = "2026-01-13"
-    time_slot = "13:00"
+def format_results(results: Dict[str, List[Dict[str, Any]]], date: str, time_slot: str) -> str:
+    """Format the results into a nice message"""
+    if not results:
+        return f"No available seats found for {date} at {time_slot} 😔"
+    
+    message = f"<b>📚 Available seats for {date} at {time_slot}</b>\n\n"
+    
+    total_seats = sum(len(seats) for seats in results.values())
+    message += f"<b>Total: {total_seats} seats available</b>\n\n"
+    
+    for room_name, seats in results.items():
+        # Sort seats by duration (longest first)
+        seats_sorted = sorted(seats, key=lambda x: x['duration_minutes'], reverse=True)
+        
+        message += f"<b>{room_name}</b> ({len(seats)} seats)\n"
+        
+        # Show top 3 longest available seats for each room
+        for seat in seats_sorted[:3]:
+            duration_str = f"{seat['duration_hours']:.1f}h" if seat['duration_hours'] >= 1 else f"{seat['duration_minutes']}min"
+            message += f"  • {seat['resource_name']}\n    Until {seat['end_time']} ({duration_str})\n"
+        
+        if len(seats_sorted) > 3:
+            message += f"  ... and {len(seats_sorted) - 3} more\n"
+        
+        message += "\n"
+    
+    return message
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command"""
+    welcome_msg = (
+        "👋 Welcome to the Library Seat Finder Bot!\n\n"
+        "Commands:\n"
+        "/check - Check available seats now\n"
+        "/check HH:MM - Check seats at specific time (e.g., /check 14:30)\n"
+        "/check YYYY-MM-DD HH:MM - Check seats on specific date and time\n\n"
+        "Example: /check 2026-01-15 15:00"
+    )
+    await update.message.reply_text(welcome_msg)
+
+
+async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /check command"""
+    structure_id = context.bot_data.get('structure_id')
+    
+    # Default to current date and time
+    now = datetime.now()
+    date = now.strftime("%Y-%m-%d")
+    # Round to next 30-minute slot
+    minutes = (now.minute // 30 + 1) * 30
+    if minutes == 60:
+        now = now + timedelta(hours=1)
+        minutes = 0
+    time_slot = f"{now.hour:02d}:{minutes:02d}"
+    
+    # Parse arguments
+    args = context.args
+    if len(args) == 1:
+        # /check HH:MM
+        time_slot = args[0]
+    elif len(args) == 2:
+        # /check YYYY-MM-DD HH:MM
+        date = args[0]
+        time_slot = args[1]
+    
+    # Validate format
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+        datetime.strptime(time_slot, "%H:%M")
+    except ValueError:
+        await update.message.reply_text(
+            "Invalid date or time format. Use:\n/check YYYY-MM-DD HH:MM"
+        )
+        return
+    
+    await update.message.reply_text(
+        f"🔍 Searching for available seats...\nDate: {date}\nTime: {time_slot}"
+    )
     
     try:
-        available_seats = get_available_seats(structure_id, date, time_slot)
-        
-        print(f"Available seats for {date} at {time_slot}:\n")
-        
-        if not available_seats:
-            print("No available seats found.")
-        else:
-            for room_name, seats in available_seats.items():
-                print(f"{room_name}: {len(seats)} seats available")
-                
-                # Sort seats by duration (longest first)
-                seats_sorted = sorted(seats, key=lambda x: x['duration_minutes'], reverse=True)
-                
-                for seat in seats_sorted:
-                    duration_str = f"{seat['duration_hours']:.1f}h" if seat['duration_hours'] >= 1 else f"{seat['duration_minutes']}min"
-                    print(f"  - {seat['resource_name']} (available until {seat['end_time']}, {duration_str})")
-                print()
+        results = get_available_seats(structure_id, date, time_slot)
+        formatted_msg = format_results(results, date, time_slot)
+        await update.message.reply_text(formatted_msg, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Error fetching data: {e}")
+        await update.message.reply_text(f"Error fetching data: {str(e)}")
+
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle errors"""
+    logger.error(f"Update {update} caused error {context.error}")
+
+
+def main():
+    """Main function to run the bot"""
+    # Get configuration from environment variables
+    BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+    WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # e.g., https://yourdomain.com/webhook
+    PORT = int(os.environ.get("PORT", 8080))
+    STRUCTURE_ID = os.environ.get("STRUCTURE_ID", "4b867ddd-46fd-4fe5-a57b-cdd4a3e1520d")
     
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching data: {e}")
+    if not BOT_TOKEN:
+        logger.error("Error: Please set TELEGRAM_BOT_TOKEN environment variable")
+        exit(1)
+    
+    # Create application
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Store structure_id in bot_data for access in handlers
+    application.bot_data['structure_id'] = STRUCTURE_ID
+    
+    # Add handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("check", check_command))
+    application.add_error_handler(error_handler)
+    
+    if WEBHOOK_URL:
+        # Run with webhook
+        logger.info(f"Starting bot with webhook: {WEBHOOK_URL}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path="webhook",
+            webhook_url=f"{WEBHOOK_URL}/webhook"
+        )
+    else:
+        # Run with polling (for local development)
+        logger.info("Starting bot with polling (local development mode)")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == "__main__":
+    main()
