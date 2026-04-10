@@ -1,6 +1,7 @@
 import requests
 from typing import List, Dict, Any
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import os
 import logging
 
@@ -152,8 +153,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Commands:\n"
         "/check - Check available seats now\n"
         "/check HH:MM - Check seats at specific time (e.g., /check 14:30)\n"
+        "/check tomorrow HH:MM - Check seats tomorrow (e.g., /check tomorrow 9:00)\n"
+        "/check DD HH:MM - Check seats on a day this month (e.g., /check 15 10:30)\n"
         "/check YYYY-MM-DD HH:MM - Check seats on specific date and time\n\n"
-        "Example: /check 2026-01-15 15:00"
+        "Example: /check tomorrow 10:00"
     )
     await update.message.reply_text(welcome_msg)
 
@@ -162,8 +165,8 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /check command"""
     structure_id = context.bot_data.get('structure_id')
     
-    # Default to current date and time
-    now = datetime.now()
+    # Default to current date and time (Italian local time, DST-aware)
+    now = datetime.now(ZoneInfo('Europe/Rome'))
     date = now.strftime("%Y-%m-%d")
     # Round to next 30-minute slot
     minutes = (now.minute // 30 + 1) * 30
@@ -178,22 +181,38 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # /check HH:MM
         time_slot = args[0]
     elif len(args) == 2:
+        # /check tomorrow HH:MM  or  /check today HH:MM
+        # /check DD HH:MM  (day of current month)
         # /check YYYY-MM-DD HH:MM
-        date = args[0]
+        date_arg = args[0].lower()
+        if date_arg == "tomorrow":
+            date = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        elif date_arg == "today":
+            pass  # date already set to today
+        elif date_arg.isdigit():
+            day = int(date_arg)
+            date = now.replace(day=day).strftime("%Y-%m-%d")
+        else:
+            date = args[0]
         time_slot = args[1]
-    
-    # Validate format
+
+    # Validate format and normalize (zero-pad hours so "9:00" → "09:00")
     try:
         datetime.strptime(date, "%Y-%m-%d")
-        datetime.strptime(time_slot, "%H:%M")
+        time_slot = datetime.strptime(time_slot, "%H:%M").strftime("%H:%M")
     except ValueError:
         await update.message.reply_text(
-            "Invalid date or time format. Use:\n/check YYYY-MM-DD HH:MM"
+            "Invalid date or time format. Use:\n"
+            "/check HH:MM\n"
+            "/check tomorrow HH:MM\n"
+            "/check DD HH:MM  (day of current month)\n"
+            "/check YYYY-MM-DD HH:MM"
         )
         return
-    
+
+    friendly_date = datetime.strptime(date, "%Y-%m-%d").strftime("%A, %d %B %Y")
     await update.message.reply_text(
-        f"🔍 Searching for available seats...\nDate: {date}\nTime: {time_slot}"
+        f"Searching for available seats on {friendly_date} at {time_slot}..."
     )
     
     try:
